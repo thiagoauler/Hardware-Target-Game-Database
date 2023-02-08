@@ -86,6 +86,9 @@ destination files are on another filesystem. Please note that when
 copying to a FAT32 or exFAT SD card, hardlinks are automatically
 converted into normal files.
 
+This parameter is compatible with `--file_strategy` for extra
+saving.
+
 `-s` (or `--skip_existing`) avoids overwriting files that already
 exist in the destination folder.
 

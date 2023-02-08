@@ -9,6 +9,7 @@ import shutil
 import hashlib
 import argparse
 import zipfile
+import zlib
 from collections import defaultdict
 from collections import Counter
 
@@ -100,6 +101,17 @@ if __name__ == '__main__':
                         type='bool',
                         help=("Drops the 1st directory path in the SMDB file "
                               "so you can customize the name."))
+    
+    # Valid uses of this flag include: -z, --zip
+    parser.add_argument("-z", "--zip",
+                        dest="compress_file",
+                        default=False,
+                        # nargs and const below allow us to accept the
+                        # zero-argument form of --zip
+                        nargs="?",
+                        const=True,
+                        type='bool',
+                        help=("Compress files so you can save some space."))
 
     ARGS = parser.parse_args()
 
@@ -170,7 +182,26 @@ def copy_file(source, dest, original):
             return
         else:
             os.remove(dest)
-
+    zipdest = os.path.splitext(dest)[0] + ".zip"
+    if os.path.exists(zipdest):
+        if ARGS.skip_existing:
+            return
+        else:
+            os.remove(zipdest)
+            
+    if ARGS.compress_file:
+        if not zipfile.is_zipfile(source):
+            # create the zipfile only for the orignal file
+            zipsource = os.path.join(TEMP_FOLDER,
+                                     os.path.splitext(os.path.split(original)[1])[0] + ".zip")
+            if original == dest:
+                with zipfile.ZipFile(zipsource, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    filename = os.path.split(original)[1]
+                    zf.write(source, filename)
+            # set the variables, so copy_fn() can manipulate de the zipfiles
+            source = zipsource
+        dest = zipdest
+        
     try:
         # copy the file to the new directory
         copy_fn(source, dest)
@@ -187,31 +218,25 @@ def copy_file(source, dest, original):
             shutil.copyfile(source, fixed_dest)
 
 
-def extract_file(filename, entry, method, dest):
+def extract_file(filename, entry, method):
     """
-    extracts entry from archive to given destination directory
+    extracts entry from archive to a temporary directory
     """
     if method == 'zip':
-        # Stolen shamelessly from https://stackoverflow.com/a/4917469
-        # Eliminates the random directories that appear when a file is
-        # extracted from a zip file
         with zipfile.ZipFile(filename) as zip_file:
-            for member in zip_file.namelist():
-                # skip other files in the zip
-                if member != entry:
-                    continue
-
-                basename = os.path.basename(member)
-                # skip directories
-                if not basename:
-                    continue
-
-                # copy file (taken from zipfile's extract)
-                source = zip_file.open(member)
-                target = open(dest, "wb")
-                with source, target:
-                    shutil.copyfileobj(source, target)
-
+            # a neat zip is a compress file that contains only one file and no folder structure
+            neat_zip = len(zip_file.namelist()) == 1
+            
+            extract_path = TEMP_FOLDER
+            extract_file = os.path.join(extract_path, entry)
+            already_extracted = os.path.exists(extract_file)
+            
+            if not neat_zip or not ARGS.compress_file:
+                if already_extracted:
+                    return extract_file
+                return zip_file.extract(entry, path=extract_path)       
+    return filename
+            
 
 def parse_database(target_database, drop_initial_directory):
     """
@@ -274,17 +299,16 @@ def parse_folder(source_folder, db, output_folder):
                                 original = new_file
                             if (not ARGS.skip_existing or not
                                     os.path.exists(new_file)):
+                                source_file = info['filename']
                                 if info['archive']:
                                     # extract file from archive to directory
-                                    extract_file(info['filename'],
-                                                 info['archive']['entry'],
-                                                 info['archive']['type'],
-                                                 new_file)
-                                else:
-                                    # copy the file to the new directory
-                                    copy_file(info['filename'],
-                                              new_file,
-                                              original)
+                                    source_file = extract_file(source_file,
+                                                               info['archive']['entry'],
+                                                               info['archive']['type'])
+                                # copy the file to the new directory
+                                copy_file(source_file,
+                                          new_file,
+                                          original)
                         # remove the hit from the database
                         del db[h]
 
@@ -357,10 +381,13 @@ if __name__ == '__main__':
     MISSING_FILES = ARGS.missing_files
     END_LINE = "\n" if ARGS.new_line else "\r"
     DROP_INITIAL_DIRECTORY = ARGS.drop_initial_directory
+    TEMP_FOLDER = os.path.join(OUTPUT_FOLDER, "_tmp_")
 
+    os.makedirs(TEMP_FOLDER, exist_ok=True)
     DATABASE, NUMBER_OF_ENTRIES = parse_database(TARGET_DATABASE,
                                                  DROP_INITIAL_DIRECTORY)
     parse_folder(SOURCE_FOLDER, DATABASE, OUTPUT_FOLDER)
+    shutil.rmtree(TEMP_FOLDER)
 
     # Observed files will have either their SHA256 or their CRC32 entry
     # deleted (or both) from the database. For missing files, both entries
