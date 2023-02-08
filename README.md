@@ -86,6 +86,7 @@ destination files are on another filesystem. Please note that when
 copying to a FAT32 or exFAT SD card, hardlinks are automatically
 converted into normal files.
 
+`-z` (or `--zip`) compresses the files when building folder.
 This parameter is compatible with `--file_strategy` for extra
 saving.
 
